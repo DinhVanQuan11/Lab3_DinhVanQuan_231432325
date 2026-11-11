@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lab 3 - Vuon cay cong nghiep</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+:root{font-family:system-ui,Arial,sans-serif;color-scheme:dark}body{margin:0;background:#0e1921;color:#eaf5f5}main{max-width:1030px;margin:35px auto;padding:20px}h1{font-size:28px}p{color:#a6bdc2}.top{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{padding:7px 13px;border-radius:20px;background:#293742;color:#becfd2}.good{background:#135c48;color:white}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:20px}.card{background:#182833;border:1px solid #29404c;border-radius:15px;padding:20px}.metric{font-size:45px;font-weight:700;color:#57dab2}.chart{height:230px}.buttons{display:flex;gap:10px;flex-wrap:wrap}button{border:none;background:#247d65;color:white;padding:12px 19px;border-radius:9px;cursor:pointer;font-weight:650}button.off{background:#854e4e}button:disabled{opacity:.45;cursor:not-allowed}.selected{outline:2px solid #e2f1f1;outline-offset:3px}small{color:#9fb6bb}code{color:#75dfc5} @media(max-width:700px){.grid{grid-template-columns:1fr}}
+</style></head><body><main>
+<div class="top"><h1>🌿 Giám sát vườn cây công nghiệp</h1><span id="conn" class="pill">Đang kết nối...</span></div>
+<p>ESP32 · FreeRTOS · DHT22 · MQTT | Lab 3 - Đề 2</p>
+<section class="card"><h3>Chế độ điều khiển</h3><p id="modeText">Đang chờ trạng thái từ ESP32...</p><div class="buttons"><button class="modeButton" data-mode="AUTO">AUTO (tự động)</button><button class="modeButton off" data-mode="MANUAL">MANUAL (thủ công)</button></div><p><small>AUTO: nhiệt độ ≥30°C bật quạt, ≤28°C tắt; độ ẩm &lt;40% bật bơm, ≥55% tắt. MANUAL: dùng các nút bật/tắt bơm và quạt ở dưới. Phun sương luôn tự động.</small></p></section><div class="grid">
+ <section class="card"><h3>Nhiệt độ</h3><div id="temp" class="metric">-- °C</div></section>
+ <section class="card"><h3>Độ ẩm không khí</h3><div id="hum" class="metric">-- %</div><small>Mục tiêu bài lab: 40–60%</small></section>
+ <section class="card"><h3>Biểu đồ nhiệt độ</h3><div class="chart"><canvas id="tempChart"></canvas></div></section>
+ <section class="card"><h3>Biểu đồ độ ẩm</h3><div class="chart"><canvas id="humChart"></canvas></div></section>
+ <section class="card"><h3>Máy bơm (AUTO / MANUAL)</h3><p>Trạng thái: <strong id="pumpState">Chưa rõ</strong></p><div class="buttons"><button class="control" data-topic="pump" data-value="ON">Bật bơm</button><button class="control off" data-topic="pump" data-value="OFF">Tắt bơm</button></div></section>
+ <section class="card"><h3>Quạt (AUTO / MANUAL)</h3><p>Trạng thái: <strong id="fanState">Chưa rõ</strong></p><div class="buttons"><button class="control" data-topic="fan" data-value="ON">Bật quạt</button><button class="control off" data-topic="fan" data-value="OFF">Tắt quạt</button></div></section>
+ <section class="card"><h3>Máy phun sương (tự động)</h3><div id="mist" class="metric">-- %</div><small>Phun theo vùng độ ẩm: 35–40%: 25%/10 giây; 30–35%: 50%/20 giây; dưới 30%: 100%/30 giây. Hết giờ sẽ tắt; chuyển sang vùng độ ẩm khác sẽ phun đợt mới. Không điều khiển manual.</small></section>
+ <section class="card"><h3>Thông tin kết nối</h3><p>Broker: <code>broker.hivemq.com</code></p><p>Topic: <code id="topic"></code></p><small>Broker công khai chỉ để demo; ai biết topic đều có thể gửi lệnh.</small></section>
+</div>
+</main><script>
+const BASE_TOPIC = 'lab3/de2/demo-7c29b'; // MUST match ESP32 sketch
+const url = 'wss://broker.hivemq.com:8884/mqtt';
+const conn = document.getElementById('conn');
+document.getElementById('topic').textContent=BASE_TOPIC;
+const buttons = [...document.querySelectorAll('.control')];
+const modeButtons = [...document.querySelectorAll('.modeButton')];
+let currentMode = null;
+function updateButtons(){
+ buttons.forEach(b=>b.disabled=!client.connected || currentMode!=='MANUAL');
+ modeButtons.forEach(b=>{b.disabled=!client.connected; b.classList.toggle('selected',b.dataset.mode===currentMode);});
+}
+
+const labels = [], temperatures = [], humidities = [];
+function plot(canvas,label,data,color){return new Chart(document.getElementById(canvas),{
+ type:'line',data:{labels,datasets:[{label,data,borderColor:color,backgroundColor:color,tension:.25,pointRadius:2}]},
+ options:{responsive:true,maintainAspectRatio:false,animation:false,scales:{x:{ticks:{color:'#adbdc7'}},y:{ticks:{color:'#adbdc7'}}},plugins:{legend:{labels:{color:'#ebf3f3'}}}}
+});}
+const tc=plot('tempChart','°C',temperatures,'#f4b860');
+const hc=plot('humChart','%',humidities,'#6ac8ef');
+const client=mqtt.connect(url,{clientId:'web-lab3-'+Math.random().toString(16).slice(2),clean:true,connectTimeout:10000,reconnectPeriod:3000});
+client.on('connect',()=>{conn.textContent='MQTT đã kết nối';conn.className='pill good';updateButtons();client.subscribe([BASE_TOPIC+'/data', BASE_TOPIC+'/state']);});
+client.on('reconnect',()=>{conn.textContent='Đang kết nối lại...';conn.className='pill';updateButtons();});
+client.on('close',()=>{conn.textContent='Mất kết nối';conn.className='pill';updateButtons();});
+client.on('error',err=>{console.error('MQTT',err);conn.textContent='Lỗi kết nối MQTT';});
+client.on('message',(topic,buffer)=>{
+ let msg;try{msg=JSON.parse(buffer.toString());}catch{return;}
+ if(topic===BASE_TOPIC+'/data' && typeof msg.temperature==='number' && typeof msg.humidity==='number'){
+  document.getElementById('temp').textContent=msg.temperature.toFixed(1)+' °C';
+  document.getElementById('hum').textContent=msg.humidity.toFixed(1)+' %';
+  labels.push(new Date().toLocaleTimeString());temperatures.push(msg.temperature);humidities.push(msg.humidity);
+  if(labels.length>30){labels.shift();temperatures.shift();humidities.shift();}tc.update();hc.update();
+ }
+ if(topic===BASE_TOPIC+'/state'){
+  currentMode=msg.mode==='AUTO' || msg.mode==='MANUAL' ? msg.mode : null;
+  document.getElementById('modeText').textContent=currentMode==='AUTO'?'AUTO: ESP32 tự điều khiển theo cảm biến':currentMode==='MANUAL'?'MANUAL: nút bơm và quạt đang khả dụng':'Chưa nhận trạng thái chế độ';
+  updateButtons();
+  document.getElementById('pumpState').textContent=msg.pump?'Đang bật':'Đang tắt';
+  document.getElementById('fanState').textContent=msg.fan?'Đang bật':'Đang tắt';
+  document.getElementById('mist').textContent=Number(msg.mist||0)+' %';
+ }
+});
+modeButtons.forEach(button=>button.addEventListener('click',()=>{
+ if(!client.connected)return;
+ client.publish(BASE_TOPIC+'/cmd/mode',button.dataset.mode,{qos:0,retain:false});
+}));
+buttons.forEach(button=>button.addEventListener('click',()=>{
+ if(!client.connected)return;
+ client.publish(BASE_TOPIC+'/cmd/'+button.dataset.topic,button.dataset.value,{qos:0,retain:false});
+}));
+</script></body></html>
